@@ -326,3 +326,113 @@ LionButton.MouseButton1Click:Connect(function()
     end
     moved = false
 end)
+local HttpService = game:GetService("HttpService")
+local TeleportService = game:GetService("TeleportService")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+local function getNextServerJobId()
+    local ok, res = pcall(function()
+        local url = string.format(
+            "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100",
+            game.PlaceId
+        )
+        return HttpService:JSONDecode(game:HttpGet(url))
+    end)
+
+    if ok and res and res.data then
+        local list = {}
+        for _, srv in ipairs(res.data) do
+            if srv.id ~= game.JobId and srv.playing < srv.maxPlayers then
+                table.insert(list, srv.id)
+            end
+        end
+        if #list > 0 then
+            return list[math.random(1, #list)]
+        end
+    end
+    return nil
+end
+
+local function switchDeviceAndServer(deviceKey)
+    local labelText = (deviceLabels and deviceLabels[deviceKey]) or deviceKey
+    getgenv().SelectedDevice = deviceKey
+    getgenv().PreviousJobId = game.JobId
+    getgenv().JoinedNewServer = true
+
+    local persist = string.format([[
+        getgenv().SelectedDevice = %q
+        getgenv().PreviousJobId = %q
+        getgenv().JoinedNewServer = true
+    ]], deviceKey, game.JobId)
+
+    if queue_on_teleport then
+        queue_on_teleport(persist)
+    elseif syn and syn.queue_on_teleport then
+        syn.queue_on_teleport(persist)
+    end
+
+    if typeof(showBanner) == "function" then
+        showBanner("جاري تدقيق السيرفرات والانتقال بوضع: " .. tostring(labelText))
+    end
+
+    local targetId = getNextServerJobId()
+    local sent = pcall(function()
+        if targetId then
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, targetId, LocalPlayer)
+        else
+            TeleportService:Teleport(game.PlaceId, LocalPlayer)
+        end
+    end)
+
+    if not sent then
+        TeleportService:Teleport(game.PlaceId, LocalPlayer)
+    end
+end
+
+-- ربط تلقائي لأزرار الأجهزة (سوني PS5، تلفون Mobile، كمبيوتر PC)
+local function bindDeviceButtons()
+    local root = (typeof(MainFrame) == "Instance" and MainFrame) or game:GetService("CoreGui"):FindFirstChild("DeviceSwitcherUI")
+    if not root then return end
+
+    for _, obj in ipairs(root:GetDescendants()) do
+        if obj:IsA("GuiButton") then
+            local combined = string.lower(obj.Name .. " " .. (obj:IsA("TextButton") and obj.Text or ""))
+            if string.find(combined, "ps5") or string.find(combined, "سوني") then
+                obj.MouseButton1Click:Connect(function()
+                    switchDeviceAndServer("PS5")
+                end)
+            elseif string.find(combined, "mobile") or string.find(combined, "تلفون") or string.find(combined, "جوال") then
+                obj.MouseButton1Click:Connect(function()
+                    switchDeviceAndServer("Mobile")
+                end)
+            elseif string.find(combined, "pc") or string.find(combined, "كمبيوتر") then
+                obj.MouseButton1Click:Connect(function()
+                    switchDeviceAndServer("PC")
+                end)
+            end
+        end
+    end
+end
+
+pcall(bindDeviceButtons)
+
+-- Post-teleport server verification and banner
+task.spawn(function()
+    task.wait(0.8)
+    local dev = getgenv().SelectedDevice
+    if dev and typeof(showBanner) == "function" then
+        local labelText = (deviceLabels and deviceLabels[dev]) or dev
+        if getgenv().JoinedNewServer then
+            local isNewSrv = (getgenv().PreviousJobId ~= nil and getgenv().PreviousJobId ~= game.JobId)
+            if isNewSrv then
+                showBanner("Joined new server | Mode: " .. tostring(labelText))
+            else
+                showBanner("Joined server | Mode: " .. tostring(labelText) .. " (Verified)")
+            end
+            getgenv().JoinedNewServer = false
+        else
+            showBanner("Current Mode: " .. tostring(labelText))
+        end
+    end
+end)
